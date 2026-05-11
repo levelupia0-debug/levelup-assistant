@@ -97,6 +97,19 @@
             <div id="chatHistory" class="flex flex-col gap-4 justify-end w-full pb-4"></div>
         </div>
 
+        <!-- MODAL GLOBAL (descriptions, sources légales, etc.) -->
+        <div id="globalModal" class="hidden fixed inset-0 z-[9999] bg-black/80 backdrop-blur-md flex items-end justify-center p-4" onclick="if(event.target===this)window.closeGlobalModal()">
+            <div class="w-full max-w-md bg-[#111116] border border-white/10 rounded-2xl overflow-hidden shadow-2xl max-h-[80vh] flex flex-col" style="animation: msgIn 0.25s ease">
+                <div class="flex items-center justify-between px-4 py-3 border-b border-white/10 shrink-0">
+                    <h3 id="globalModalTitle" class="text-white font-bold text-sm"></h3>
+                    <button onclick="window.closeGlobalModal()" class="w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-white/60 hover:text-white transition-colors">
+                        <i class="fas fa-xmark text-xs"></i>
+                    </button>
+                </div>
+                <div id="globalModalBody" class="overflow-y-auto flex-1 p-4"></div>
+            </div>
+        </div>
+
         <div class="content-z p-4 shrink-0 bg-[#06020a]/90 backdrop-blur-md border-t border-white/5" id="appInputBar">
 
             <!-- Chat Normal -->
@@ -290,6 +303,9 @@ Si un utilisateur cherche ou demande un film/une série :
 LIMITES INVITÉS :
 Les utilisateurs non connectés ont une limite de requêtes par jour. Si tu détectes qu'ils approchent de la limite, rappelle-leur qu'ils peuvent se connecter pour un accès illimité via [ACTION:LOGIN].
 
+MUSIQUE :
+Si un utilisateur cherche une chanson ou un artiste, réponds avec une description et termine par : [ACTION:SHOW_MUSIC:Artiste - Titre de la chanson]
+
 BALISES INTERACTIVES DISPONIBLES :
 [ACTION:OPEN_DASHBOARD] — Ouvrir le tableau de bord utilisateur
 [ACTION:LOGIN] — Ouvrir le popup de connexion/inscription
@@ -299,7 +315,8 @@ BALISES INTERACTIVES DISPONIBLES :
 [ACTION:OPEN_APP:ia] — Ouvrir Level IA Premium
 [ACTION:CONTACT_SUPPORT] — Afficher les contacts support
 [ACTION:ASK_EMAIL_FOR_KEY] — Déclencher le flux de génération de clé
-[ACTION:SHOW_MOVIE:Titre] — Afficher la carte du film/série`;
+[ACTION:SHOW_MOVIE:Titre] — Afficher la carte du film/série
+[ACTION:SHOW_MUSIC:Artiste - Titre] — Afficher la carte musicale avec prévisualisation Apple`;
 
         async function callGeminiAPI(prompt) {
             const allKeys = await fetchAllGeminiKeys();
@@ -382,21 +399,31 @@ BALISES INTERACTIVES DISPONIBLES :
         appendTyping(currentTypingId);
 
         try {
-            // RECHERCHE ROBUSTE DANS LA BASE
-            const usersRef = collection(db, 'artifacts', 'level-ia-premium', 'public', 'data', 'talk_users');
-            const querySnapshot = await getDocs(usersRef);
+            // RECHERCHE MULTI-COLLECTIONS (logique Level IA)
+            const searchPaths = [
+                ['artifacts', 'level-ia-premium', 'users'],
+                ['artifacts', 'level-ia-premium', 'public', 'data', 'talk_users'],
+            ];
 
             if (currentTypingId) { document.getElementById(currentTypingId).remove(); currentTypingId = null; }
 
             let foundUser = null;
 
-            querySnapshot.forEach((doc) => {
-                const data = doc.data();
-                const dbEmail = (data.email || data.mail || data.adresse_mail || "").toLowerCase();
-                if (dbEmail === email) {
-                    foundUser = data;
-                }
-            });
+            for (const pathParts of searchPaths) {
+                if (foundUser) break;
+                try {
+                    const usersRef = collection(db, ...pathParts);
+                    const querySnapshot = await getDocs(usersRef);
+                    querySnapshot.forEach((docSnap) => {
+                        if (foundUser) return;
+                        const data = docSnap.data();
+                        const dbEmail = (data.email || data.mail || data.adresse_mail || data.userEmail || data.emailAddress || '').toLowerCase().trim();
+                        if (dbEmail === email) {
+                            foundUser = { ...data, _docId: docSnap.id };
+                        }
+                    });
+                } catch (pathErr) {}
+            }
 
             if (foundUser) {
                 // ✅ COMPTE TROUVÉ !
@@ -664,7 +691,12 @@ BALISES INTERACTIVES DISPONIBLES :
                         const title = movie.title || movie.name;
                         const year = (movie.release_date || movie.first_air_date || '').substring(0, 4);
                         const typeTag = movie.media_type === 'tv' ? 'Série' : 'Film';
-                        const desc = movie.overview ? (movie.overview.length > 120 ? movie.overview.substring(0, 120) + '...' : movie.overview) : "Découvrez ce contenu exclusif sur nos serveurs LevelMovie en haute définition.";
+                        const fullDesc = movie.overview || '';
+                        const shortDesc = fullDesc.length > 90 ? fullDesc.substring(0, 90) + '...' : fullDesc;
+                        const descEscaped = fullDesc.replace(/'/g, '&#39;').replace(/\n/g, ' ');
+                        const titleEscaped = title.replace(/'/g, '&#39;');
+                        const movieIdStr = String(movie.id);
+                        const mediaTypeStr = movie.media_type;
 
                         const movieCardHtml = `
                             <div class="mt-4 p-1 rounded-xl bg-gradient-to-br from-[#a855f7]/40 to-[#111116] shadow-xl">
@@ -672,9 +704,6 @@ BALISES INTERACTIVES DISPONIBLES :
                                     <div class="h-40 w-full relative">
                                         <img src="${TMDB_IMAGE_BASE_URL}${movie.backdrop_path || movie.poster_path}" class="w-full h-full object-cover opacity-80" alt="Affiche">
                                         <div class="absolute inset-0 bg-gradient-to-t from-[#111116] via-transparent to-transparent"></div>
-                                        <div class="absolute top-2 left-2 bg-green-500/90 backdrop-blur-md px-2 py-1 rounded text-white text-[8px] font-black tracking-widest flex items-center gap-1">
-                                            <i class="fas fa-server text-[7px]"></i> DISPONIBLE SUR NOS SERVEURS
-                                        </div>
                                         <div class="absolute top-2 right-2 bg-black/60 backdrop-blur-md px-2 py-1 rounded text-white text-[9px] font-black tracking-widest border border-white/10 flex items-center gap-1">
                                             <i class="fas fa-star text-yellow-500"></i> ${(movie.vote_average || 0).toFixed(1)}
                                         </div>
@@ -684,25 +713,69 @@ BALISES INTERACTIVES DISPONIBLES :
                                         </div>
                                     </div>
                                     <div class="p-3">
-                                        <p class="text-[10px] text-zinc-400 mb-2 line-clamp-2 leading-relaxed italic">"${desc}"</p>
-                                        <div class="flex items-center gap-1.5 mb-3 bg-green-500/10 border border-green-500/20 rounded-lg px-2 py-1.5">
-                                            <i class="fas fa-cloud-download-alt text-green-400 text-[10px]"></i>
-                                            <span class="text-[9px] text-green-300 font-semibold">Regardez directement depuis nos serveurs — <strong>aucun téléchargement requis</strong></span>
+                                        ${shortDesc ? `<p class="text-[10px] text-zinc-400 mb-1 leading-relaxed">${shortDesc}</p>` : ''}
+                                        ${fullDesc.length > 90 ? `<button onclick="window.showMovieFullDesc('${descEscaped}')" class="text-[10px] text-[#a855f7] font-semibold mb-2 hover:text-purple-400 bg-transparent border-none cursor-pointer p-0">Voir plus →</button>` : ''}
+                                        <div class="flex gap-2 mt-1">
+                                            <button onclick="window.open('https://movie.levelup-ecosystem.com/', '_blank')" class="flex-1 py-2.5 bg-[#a855f7]/20 hover:bg-[#a855f7] rounded-lg text-white text-[10px] font-black uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-1.5 border border-[#a855f7]/30 outline-none">
+                                                <i class="fas fa-play text-[9px]"></i> LevelMovie
+                                            </button>
+                                            <button onclick="window.showMovieSources('${movieIdStr}', '${mediaTypeStr}', '${titleEscaped}')" class="flex-1 py-2.5 bg-white/5 hover:bg-white/10 rounded-lg text-white/70 text-[10px] font-black uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-1.5 border border-white/10 outline-none">
+                                                <i class="fas fa-tv text-[9px]"></i> Sources légales
+                                            </button>
                                         </div>
-                                        <button onclick="window.open('https://movie.levelup-ecosystem.com/', '_blank')" class="w-full py-2.5 bg-white/10 hover:bg-[#a855f7] rounded-lg text-white text-[10px] font-black uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-2 border border-white/5 outline-none">
-                                            <i class="fas fa-play"></i> Regarder sur LevelMovie
-                                        </button>
                                     </div>
                                 </div>
                             </div>
                         `;
                         html = html.replace(fullTag, movieCardHtml);
                     } else {
-                        // Si le film est sur TMDB mais n'a pas de visuel
-                        html = html.replace(fullTag, `<div class="mt-2 text-[11px] text-yellow-500 italic"><i class="fas fa-info-circle"></i> Le visuel de ce titre n'est pas disponible, mais vous pouvez le chercher directement sur LevelMovie.</div>`);
+                        html = html.replace(fullTag, `<div class="mt-2 text-[11px] text-yellow-500 italic"><i class="fas fa-info-circle"></i> Le visuel de ce titre n'est pas disponible, mais vous pouvez le chercher sur LevelMovie.</div>`);
                     }
                 } catch (e) {
-                    // En cas d'erreur de recherche TMDB
+                    html = html.replace(fullTag, '');
+                }
+            }
+
+            // ============================================
+            // CARTES MUSIQUE (iTunes API)
+            // ============================================
+            const musicRegex = /\[ACTION:SHOW_MUSIC:(.*?)\]/g;
+            const musicMatches = [...html.matchAll(musicRegex)];
+
+            for (const match of musicMatches) {
+                const fullTag = match[0];
+                const musicQuery = match[1].trim();
+                try {
+                    const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(musicQuery)}&media=music&limit=1&country=fr`);
+                    const data = await res.json();
+                    if (data.results && data.results.length > 0) {
+                        const track = data.results[0];
+                        const artworkHigh = (track.artworkUrl100 || '').replace('100x100', '300x300');
+                        const previewUrl = track.previewUrl || '';
+                        const appleMusicUrl = track.trackViewUrl || '';
+                        const previewId = 'preview-' + Date.now() + Math.random().toString(36).substr(2, 5);
+
+                        const musicCardHtml = `
+                            <div class="mt-4 p-1 rounded-xl bg-gradient-to-br from-[#ec4899]/40 to-[#111116] shadow-xl">
+                                <div class="bg-[#111116] rounded-lg overflow-hidden border border-white/10 p-3 flex gap-3">
+                                    ${artworkHigh ? `<img src="${artworkHigh}" class="w-16 h-16 rounded-xl object-cover shadow-lg flex-shrink-0" alt="Artwork">` : `<div class="w-16 h-16 rounded-xl bg-[#ec4899]/20 flex items-center justify-center flex-shrink-0"><i class="fas fa-music text-[#ec4899] text-xl"></i></div>`}
+                                    <div class="flex-1 min-w-0">
+                                        <h4 class="text-white font-black text-sm truncate">${track.trackName || musicQuery}</h4>
+                                        <p class="text-zinc-400 text-[11px] truncate">${track.artistName || ''}</p>
+                                        <p class="text-zinc-500 text-[10px] truncate italic">${track.collectionName || ''}</p>
+                                        <div class="flex gap-2 mt-2">
+                                            ${previewUrl ? `<button id="${previewId}" onclick="window.toggleMusicPreview('${previewUrl}', '${previewId}')" class="flex-1 py-1.5 bg-[#ec4899]/20 border border-[#ec4899]/30 rounded-lg text-[#ec4899] text-[10px] font-black uppercase tracking-wider active:scale-95 flex items-center justify-center gap-1 transition-all"><i class="fas fa-play text-[8px]"></i> Écouter</button>` : ''}
+                                            ${appleMusicUrl ? `<a href="${appleMusicUrl}" target="_blank" class="flex-1 py-1.5 bg-white/5 border border-white/10 rounded-lg text-white/70 text-[10px] font-black uppercase tracking-wider active:scale-95 flex items-center justify-center gap-1 no-underline hover:bg-white/10"><i class="fab fa-apple text-[10px]"></i> Apple Music</a>` : ''}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                        html = html.replace(fullTag, musicCardHtml);
+                    } else {
+                        html = html.replace(fullTag, `<div class="mt-2 text-[11px] text-yellow-500 italic"><i class="fas fa-music"></i> Aucun résultat musical trouvé pour cette recherche.</div>`);
+                    }
+                } catch (e) {
                     html = html.replace(fullTag, '');
                 }
             }
@@ -833,6 +906,104 @@ BALISES INTERACTIVES DISPONIBLES :
             const area = document.getElementById('chatArea');
             area.scrollTo({ top: area.scrollHeight, behavior: 'smooth' });
         }
+
+        // ==========================================
+        // MODAL GLOBAL
+        // ==========================================
+        window.openGlobalModal = function(title, body) {
+            document.getElementById('globalModalTitle').textContent = title;
+            document.getElementById('globalModalBody').innerHTML = body;
+            document.getElementById('globalModal').classList.remove('hidden');
+        };
+
+        window.closeGlobalModal = function() {
+            document.getElementById('globalModal').classList.add('hidden');
+        };
+
+        window.showMovieFullDesc = function(desc) {
+            window.openGlobalModal('Description complète', `<p class="text-zinc-300 text-sm leading-relaxed">${desc}</p>`);
+        };
+
+        const TMDB_PROVIDER_MAP = {
+            8:   { name: 'Netflix',           url: (t) => `https://www.netflix.com/search?q=${encodeURIComponent(t)}` },
+            9:   { name: 'Amazon Prime Video',url: (t) => `https://www.primevideo.com/search/?phrase=${encodeURIComponent(t)}` },
+            337: { name: 'Disney+',           url: (t) => `https://www.disneyplus.com/search/${encodeURIComponent(t)}` },
+            350: { name: 'Apple TV+',         url: (t) => `https://tv.apple.com/search?term=${encodeURIComponent(t)}` },
+            381: { name: 'Canal+',            url: (t) => `https://www.canalplus.com/recherche/?q=${encodeURIComponent(t)}` },
+            35:  { name: 'Rakuten TV',        url: (t) => `https://rakuten.tv/fr/search?query=${encodeURIComponent(t)}` },
+            2:   { name: 'Apple iTunes',      url: (t) => `https://itunes.apple.com/fr/search?term=${encodeURIComponent(t)}` },
+            531: { name: 'Paramount+',        url: (t) => `https://www.paramountplus.com/fr/search/?query=${encodeURIComponent(t)}` },
+        };
+
+        window.showMovieSources = async function(movieId, mediaType, title) {
+            window.openGlobalModal('Sources légales', `<div class="flex justify-center py-6"><div class="w-5 h-5 border-2 border-[#a855f7] border-t-transparent rounded-full animate-spin"></div></div>`);
+            try {
+                const endpoint = mediaType === 'tv' ? 'tv' : 'movie';
+                const res = await fetch(`https://api.themoviedb.org/3/${endpoint}/${movieId}/watch/providers?api_key=${TMDB_API_KEY}`);
+                const data = await res.json();
+                const frData = data.results && data.results.FR;
+                const raw = frData ? [...(frData.flatrate || []), ...(frData.rent || []), ...(frData.buy || [])] : [];
+                const seen = new Set();
+                const providers = raw.filter(p => { if (seen.has(p.provider_id)) return false; seen.add(p.provider_id); return true; });
+
+                if (providers.length === 0) {
+                    document.getElementById('globalModalBody').innerHTML = `
+                        <div class="flex flex-col items-center gap-3 py-8 text-center">
+                            <i class="fas fa-satellite-dish text-4xl text-zinc-600"></i>
+                            <p class="text-zinc-400 text-sm font-medium">Oups, on dirait qu'il n'y a pas d'autre source légale disponible en France pour ce titre.</p>
+                            <p class="text-zinc-600 text-xs">Vous pouvez le regarder directement sur LevelMovie.</p>
+                        </div>`;
+                } else {
+                    const list = providers.map(p => {
+                        const info = TMDB_PROVIDER_MAP[p.provider_id];
+                        const url = info ? info.url(title) : `https://www.google.com/search?q=${encodeURIComponent(title + ' streaming légal')}`;
+                        const logo = p.logo_path ? `https://image.tmdb.org/t/p/w45${p.logo_path}` : '';
+                        return `<a href="${url}" target="_blank" class="flex items-center gap-3 p-3 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 transition-all" style="text-decoration:none;">
+                            ${logo ? `<img src="${logo}" class="w-9 h-9 rounded-lg object-cover flex-shrink-0" alt="${p.provider_name}">` : `<div class="w-9 h-9 rounded-lg bg-white/10 flex items-center justify-center flex-shrink-0"><i class="fas fa-play text-white/50 text-xs"></i></div>`}
+                            <div class="flex-1 min-w-0">
+                                <p class="text-white text-sm font-bold">${p.provider_name}</p>
+                                <p class="text-zinc-500 text-[10px]">Streaming légal</p>
+                            </div>
+                            <i class="fas fa-external-link-alt text-zinc-600 text-xs"></i>
+                        </a>`;
+                    }).join('');
+                    document.getElementById('globalModalBody').innerHTML = `
+                        <div class="flex flex-col gap-2">
+                            <p class="text-zinc-500 text-[11px] mb-1">Sources disponibles en France :</p>
+                            ${list}
+                        </div>`;
+                }
+            } catch (e) {
+                document.getElementById('globalModalBody').innerHTML = `<p class="text-zinc-400 text-sm text-center py-4">Impossible de récupérer les sources. Réessayez plus tard.</p>`;
+            }
+        };
+
+        // ==========================================
+        // LECTEUR AUDIO MUSIQUE (PRÉVISUALISATION)
+        // ==========================================
+        let currentMusicAudio = null;
+        let currentPreviewBtnId = null;
+
+        window.toggleMusicPreview = function(url, btnId) {
+            const btn = document.getElementById(btnId);
+            if (currentMusicAudio && !currentMusicAudio.paused) {
+                currentMusicAudio.pause();
+                if (currentPreviewBtnId) {
+                    const prevBtn = document.getElementById(currentPreviewBtnId);
+                    if (prevBtn) prevBtn.innerHTML = '<i class="fas fa-play text-[8px]"></i> Écouter';
+                }
+                if (currentPreviewBtnId === btnId) { currentMusicAudio = null; currentPreviewBtnId = null; return; }
+            }
+            currentMusicAudio = new Audio(url);
+            currentPreviewBtnId = btnId;
+            currentMusicAudio.play().catch(() => {});
+            if (btn) btn.innerHTML = '<i class="fas fa-pause text-[8px]"></i> Pause';
+            currentMusicAudio.onended = () => {
+                if (btn) btn.innerHTML = '<i class="fas fa-play text-[8px]"></i> Écouter';
+                currentMusicAudio = null; currentPreviewBtnId = null;
+            };
+        };
+
     </script>
 </body>
 </html>
